@@ -1,0 +1,140 @@
+# Create VPC
+resource "aws_vpc" "main" {
+  cidr_block = var.vpc_cidr
+}
+
+# Create Public Subnet
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidr
+  availability_zone       = "us-west-2"  # Modify based on your region
+  map_public_ip_on_launch = true
+}
+
+# Create Private Subnet
+resource "aws_subnet" "private" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.private_subnet_cidr
+  availability_zone       = "us-west-2"  # Modify based on your region
+}
+
+# Create Internet Gateway (IGW)
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+}
+
+# Create Public Route Table
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+}
+
+# Create Route for Public Subnet (direct to IGW)
+resource "aws_route" "public_route" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.main.id
+}
+
+# Associate Route Table with Public Subnet
+resource "aws_route_table_association" "public_association" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+# Create Private Route Table
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+}
+
+# Allocate Elastic IP for NAT Gateway
+resource "aws_eip" "nat" {
+  
+}
+
+# Create NAT Gateway
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public.id
+}
+
+# Route from Private Subnet to NAT Gateway (Outbound traffic)
+resource "aws_route" "private_route" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main.id
+}
+
+# Associate Route Table with Private Subnet
+resource "aws_route_table_association" "private_association" {
+  subnet_id      = aws_subnet.private.id
+  route_table_id = aws_route_table.private.id
+}
+
+# Security Group for EC2 instances
+resource "aws_security_group" "ec2_sg" {
+  name        = "ec2_security_group"
+  description = "Allow SSH and HTTP access"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# EC2 instance (for testing MariaDB connection)
+resource "aws_instance" "web" {
+  ami           = "ami-087f352c165340ea1"  # Modify to a valid Ubuntu AMI
+  instance_type = var.instance_type
+  subnet_id     = aws_subnet.public.id
+  security_groups = [aws_security_group.ec2_sg.name]
+
+  tags = {
+    Name = "WebServer"
+  }
+}
+
+# MariaDB Database on EC2 (Install and configure via User Data)
+resource "aws_instance" "mariadb" {
+  ami           = "ami-087f352c165340ea1"  # Modify to a valid Ubuntu AMI
+  instance_type = var.instance_type
+  subnet_id     = aws_subnet.private.id
+  security_groups = [aws_security_group.ec2_sg.name]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              sudo apt-get update
+              sudo apt-get install -y mariadb-server
+              sudo systemctl start mariadb
+              sudo systemctl enable mariadb
+              EOF
+
+  tags = {
+    Name = "MariaDBServer"
+  }
+}
+
+# S3 Bucket
+resource "aws_s3_bucket" "main" {
+  bucket = "terraform-demo-bucket-${random_id.unique_id.hex}"
+}
+
+resource "random_id" "unique_id" {
+  byte_length = 8
+}
